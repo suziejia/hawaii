@@ -1,0 +1,31 @@
+# === 敏感文件：含密钥，禁止上传 ===
+.env
+.env.*
+!.env.example
+
+# === 依赖（体积过大，可由 npm install 还原）===
+/node_modules
+/.pnp
+.pnp.*
+
+# === 构建产物 ===
+/.next/
+/out/
+/build
+next-env.d.ts
+
+# === 日志与临时文件 ===
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tmp
+/tmp
+
+# === 编辑器 / 系统 ===
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/extensions.json
+.idea/
