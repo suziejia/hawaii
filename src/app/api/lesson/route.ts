@@ -6,7 +6,7 @@ export async function GET() {
   try {
     const bundle = await getLessonBundle();
     if (!bundle) return NextResponse.json({ ok: false, reason: 'not-configured-or-empty' });
-    return NextResponse.json({ ok: true, lessons: bundle.lessons, todayIndex: bundle.todayIndex });
+    return NextResponse.json({ ok: true, lessons: bundle.lessons, todayIndex: bundle.todayIndex, year: bundle.year });
   } catch {
     return NextResponse.json({ ok: false, reason: 'fetch-failed' });
   }

@@ -1,0 +1,16 @@
+{
+  "name": "Hawaii",
+  "short_name": "Hawaii",
+  "description": "3 分鐘雅思語塊默寫訓練",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F8FC",
+  "theme_color": "#002FA7",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    }
+  ]
+}

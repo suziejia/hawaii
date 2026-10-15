@@ -1,10 +1,43 @@
 @import "tailwindcss";
 
 body {
-  background: #f8faf9;
-  color: #3c3c3c;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background-color: #f7f8fc;
+  background-image:
+    radial-gradient(1100px 560px at 6% -10%, #e4ebff 0%, rgba(228, 235, 255, 0) 62%),
+    radial-gradient(900px 520px at 102% 2%, #eef2ff 0%, rgba(238, 242, 255, 0) 58%);
+  background-attachment: fixed;
+  color: #0a0f1f;
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang TC",
+    "PingFang SC", "Microsoft JhengHei", "Microsoft YaHei", sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* 品牌色選字 */
+::selection {
+  background: #002fa7;
+  color: #ffffff;
+}
+
+/* 細捲軸（Firefox / WebKit） */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cfd7ea transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d5dcec;
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b7c2dd;
+  background-clip: content-box;
 }
 
 @media (prefers-reduced-motion: reduce) {

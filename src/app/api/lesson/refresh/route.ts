@@ -6,8 +6,8 @@ export async function POST() {
   try {
     clearLessonCache();
     const bundle = await getLessonBundle();
-    if (!bundle) return NextResponse.json({ ok: false, lessons: [], todayIndex: 0 });
-    return NextResponse.json({ ok: true, lessons: bundle.lessons, todayIndex: bundle.todayIndex });
+    if (!bundle) return NextResponse.json({ ok: false, lessons: [], todayIndex: 0, year: "" });
+    return NextResponse.json({ ok: true, lessons: bundle.lessons, todayIndex: bundle.todayIndex, year: bundle.year });
   } catch {
     return NextResponse.json({ ok: false, lessons: [], todayIndex: 0 });
   }

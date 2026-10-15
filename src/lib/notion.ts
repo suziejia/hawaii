@@ -18,11 +18,13 @@ export type Lesson = {
   id: string;
   questionEn: string; // 可為空字符串（純中文課）
   questionCn: string;
-  passageSegments: PassageSegment[];
+  passageSegments: PassageSegment[]; // 僅英文文章片段（中文一律不入，見 sanitizeLesson）
+  cnSegments: PassageSegment[]; // 中文譯文片段（保留 bold，渲染為綠色高亮，不做填空）
   passageEn: string;
   passageCn: string;
   targetChunks: string[];
   vocab: VocabEntry[];
+  month: string; // 歸屬月份分組（九月/十月/…），由頂層月份 toggle 追蹤
 };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -32,7 +34,7 @@ const notion = process.env.NOTION_TOKEN ? new Client({ auth: process.env.NOTION_
 const PAGE_ID = process.env.NOTION_PAGE_ID ?? '';
 const TTL = 10 * 60 * 1000;
 const THROTTLE_MS = 340;
-let cache: { at: number; lessons: Lesson[]; todayIndex: number } | null = null;
+let cache: { at: number; lessons: Lesson[]; todayIndex: number; year: string } | null = null;
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -188,6 +190,53 @@ function segmentsOf(block: Block): PassageSegment[] {
   return segs;
 }
 
+/* 按行拆分 rich_text 並雙語路由：EN 行片段入 enSegs，CN 行片段入 cnSegs（保留 bold 供綠色高亮）。
+ * 關鍵：只有在真實換行（rt 內 li>0）時才插入段落分隔符——格式 run 之間絕不插入（否則文章碎成瀑布流）；
+ * EN 行保留原文空格（run 之間的空格不能丟，否則單詞粘連）。 */
+function splitSegmentsByLanguage(block: Block) {
+  const key = block?.type ?? '';
+  const body = block?.[key];
+  const enSegs: PassageSegment[] = [];
+  const cnSegs: PassageSegment[] = [];
+  const enLines: string[] = [];
+  const cnLines: string[] = [];
+  const chunks: string[] = [];
+  let prevWasEn = false;
+  if (body?.rich_text) {
+    for (const rt of body.rich_text) {
+      const bold = !!rt.annotations?.bold;
+      const lines = (rt.plain_text ?? '').split('\n');
+      lines.forEach((line: string, li: number) => {
+        if (li > 0) {
+          // 真實換行 = 段落邊界（防重複插入）
+          if (enSegs.length && enSegs[enSegs.length - 1].text !== '\n\n') enSegs.push({ text: '\n\n', bold: false });
+          if (cnSegs.length && cnSegs[cnSegs.length - 1].text !== '\n') cnSegs.push({ text: '\n', bold: false });
+          prevWasEn = false;
+        }
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        if (/^[。，、？！；：…\s\.,;:!?\(\)（）"'“”’‘]+$/.test(trimmed)) return; // 純標點碎片直接丟棄
+        if (isMostlyChinese(trimmed)) {
+          cnLines.push(trimmed);
+          cnSegs.push({ text: trimmed, bold });
+        } else if (/[\u4e00-\u9fa5]/.test(trimmed)) {
+          // 中英各半的句子碎片（如「近视600度」「，是防止 AI 產生」）：完整內容都在詞彙表/譯文區，正文殘渣直接丟棄
+          prevWasEn = false;
+        } else {
+          enLines.push(trimmed);
+          enSegs.push({ text: line, bold }); // 保留原文空格
+          if (bold) {
+            const cleaned = trimmed.replace(/^[\s,.;:"'!?()（）]+|[\s,.;:"'!?()（）]+$/g, '');
+            if (cleaned.length > 1) chunks.push(cleaned);
+          }
+          prevWasEn = true;
+        }
+      });
+    }
+  }
+  return { enSegs, cnSegs, enLines, cnLines, chunks };
+}
+
 /* 加粗片段 → 標點清洗 → 目標語塊列表 */
 function boldChunksOf(block: Block): string[] {
   const key = block?.type ?? '';
@@ -213,23 +262,22 @@ type RawLesson = {
   qCn: string;
   quoteUsed: boolean;
   segs: PassageSegment[];
+  cnSegs: PassageSegment[];
+  enParts: string[];
   cnParts: string[];
   chunks: string[];
   vocab: VocabEntry[];
   category: string;
+  month: string;
 };
 
 function finishLesson(raw: RawLesson): Lesson | null {
   const passageSegments = raw.segs;
-  const passageEn = passageSegments.map(s => s.text).join('').replace(/\s+\n/g, '\n').trim();
+  const passageEn = raw.enParts.join('\n\n').trim();
   const passageCn = raw.cnParts.join('\n\n').trim();
 
-  const chunks = Array.from(new Set(
-    passageSegments
-      .filter(s => s.bold)
-      .map(s => s.text.trim().replace(/^[\s,.;:"'!?()（）]+|[\s,.;:"'!?()（）]+$/g, ''))
-      .filter(t => t.length > 1),
-  ));
+  // 語塊池 = 段落採集時已過濾的純拉丁加粗（isLatinChunk），按出現順序去重
+  const chunks = Array.from(new Set(raw.chunks));
   if (!passageEn || !chunks.length) return null;
 
   return {
@@ -237,6 +285,7 @@ function finishLesson(raw: RawLesson): Lesson | null {
     questionEn: raw.qEn,
     questionCn: raw.qCn,
     passageSegments,
+    cnSegments: raw.cnSegs,
     passageEn,
     passageCn,
     targetChunks: chunks,
@@ -251,17 +300,57 @@ function finishLesson(raw: RawLesson): Lesson | null {
       }
       return out;
     })(),
+    month: raw.month,
   };
 }
 
-/* ---------- 2. 多課時切片引擎（💡 callout 為錨點） ---------- */
+/* ---------- 出口消毒關卡（硬保證）：無論上游解析如何變化，③ 項歷史問題絕不復發 ----------
+ * 1. 語塊池：必須是純拉丁字符（中文/日文等一律剔除）；
+ * 2. 詞條：lemma 必須含英文字母；按歸一化形式去重；
+ * 3. 題目：中文佔比 > 50% 的 questionEn 自動降級併入 questionCn。
+ */
+function sanitizeLesson(L: Lesson): Lesson {
+  const latin = (s: string) => isLatinChunk(s);
+  const cjkRatio = (s: string) => {
+    const sample = s.slice(0, 300);
+    return sample.length ? (sample.match(/[\u4e00-\u9fa5]/g)?.length ?? 0) / sample.length : 0;
+  };
+  let questionEn = L.questionEn;
+  let questionCn = L.questionCn;
+  if (questionEn && cjkRatio(questionEn) > 0.5) {
+    questionCn = questionCn ? `${questionCn} ${questionEn}` : questionEn;
+    questionEn = '';
+  }
+  // 硬保證 ④：英文文章段落裡不得殘留中文片段，一律強制移入中文譯文區
+  // 硬保證 ④（加強版）：英文區含任何 CJK 字符的片段一律清除（完整內容均在詞彙表/譯文區）
+  const enOnly = L.passageSegments.filter(sg => !/[\u4e00-\u9fa5]/.test(sg.text));
+  return {
+    ...L,
+    questionEn,
+    questionCn,
+    passageSegments: enOnly,
+    cnSegments: L.cnSegments,
+    targetChunks: L.targetChunks.filter(latin),
+    vocab: L.vocab.filter(v => /[A-Za-z]/.test(v.lemma)),
+  };
+}
+
+/* ---------- 2. 多課時切片引擎（💡 callout 為錨點，月份 toggle 歸組） ---------- */
+
+/* 月份名識別：九月/十月/十一月/十二月…（頂層 toggle 命名） */
+const MONTH_RE = /^[一二三四五六七八九十]{1,3}月$/;
 
 function segmentLessons(flat: Block[]): Lesson[] {
   const lessons: Lesson[] = [];
   let cur: RawLesson | null = null;
+  let curMonth = '';
 
   for (const b of flat) {
     const type = b?.type ?? '';
+    if (type === 'toggle') {
+      const name = plainText(b).trim();
+      if (MONTH_RE.test(name)) curMonth = name; // 進入新月分組（depth-first 扁平序列中後續塊均屬於它）
+    }
     if (type === 'callout') {
       const icon = b.callout?.icon;
       const isAnchor = icon?.type === 'emoji' && icon.emoji === '💡';
@@ -271,7 +360,7 @@ function segmentLessons(flat: Block[]): Lesson[] {
           if (done) lessons.push(done);
         }
         const { questionEn, questionCn } = splitCallout(plainText(b));
-        cur = { id: b.id, qEn: questionEn, qCn: questionCn, quoteUsed: false, segs: [], cnParts: [], chunks: [], vocab: [], category: '' };
+        cur = { id: b.id, qEn: questionEn, qCn: questionCn, quoteUsed: false, segs: [], cnSegs: [], enParts: [], cnParts: [], chunks: [], vocab: [], category: '', month: curMonth };
         continue;
       }
       // 非 💡 callout：暫不作為錨點，內容忽略
@@ -281,16 +370,16 @@ function segmentLessons(flat: Block[]): Lesson[] {
     if (type === 'paragraph') {
       const text = plainText(b);
       if (!text.trim()) continue;
-      // 段落按行切分逐行路由（處理 EN+CN 混排在同一段落塊的情況）
-      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-      for (const line of lines) {
-        if (isMostlyChinese(line)) cur.cnParts.push(line);
-        else cur.enParts.push(line);
+      // 按行拆分並雙語路由：EN 片段與 CN 片段徹底分離（結構性保證 EN/CN 排版永遠不亂）
+      const routed = splitSegmentsByLanguage(b);
+      for (const line of routed.enLines) cur.enParts.push(line);
+      for (const line of routed.cnLines) cur.cnParts.push(line);
+      if (routed.enSegs.length) {
+        cur.segs.push(...routed.enSegs);
+        cur.segs.push({ text: '\n\n', bold: false });
       }
-      // 展示片段保留原樣（渲染端過濾非拉丁加粗）；語塊只收純英文加粗，杜絕中文污染
-      cur.segs.push(...segmentsOf(b));
-      cur.segs.push({ text: '\n\n', bold: false });
-      for (const c of boldChunksOf(b)) {
+      cur.cnSegs.push(...routed.cnSegs);
+      for (const c of routed.chunks) {
         if (isLatinChunk(c)) cur.chunks.push(c);
       }
       continue;
@@ -323,19 +412,27 @@ function segmentLessons(flat: Block[]): Lesson[] {
 
 /* ---------- 4. 緩存與對外接口（10 分鐘 TTL） ---------- */
 
-export async function getLessonBundle(): Promise<{ lessons: Lesson[]; todayIndex: number } | null> {
+export async function getLessonBundle(): Promise<{ lessons: Lesson[]; todayIndex: number; year: string } | null> {
   if (!notion || !PAGE_ID) return null;
   if (cache && Date.now() - cache.at < TTL) {
-    return cache.lessons.length ? { lessons: cache.lessons, todayIndex: cache.todayIndex } : null;
+    return cache.lessons.length ? { lessons: cache.lessons, todayIndex: cache.todayIndex, year: cache.year } : null;
   }
   try {
     const flat = await fetchAllBlocksRecursive(PAGE_ID);
-    const lessons = segmentLessons(flat);
-    if (!lessons.length) return cache ? { lessons: cache.lessons, todayIndex: cache.todayIndex } : null;
+    const lessons = segmentLessons(flat).map(sanitizeLesson); // 出口消毒：硬保證語塊/詞彙純淨
+    if (!lessons.length) return cache ? { lessons: cache.lessons, todayIndex: cache.todayIndex, year: cache.year } : null;
     const todayIndex = Math.floor((Date.now() - new Date().getTimezoneOffset() * 60_000) / 86_400_000) % lessons.length;
-    cache = { at: Date.now(), lessons, todayIndex };
-    return { lessons, todayIndex };
+    // 年份 = Notion 頁面標題（如「2026」）
+    let year = '';
+    try {
+      const page = await notion.pages.retrieve({ page_id: PAGE_ID });
+      const props = (page as { properties?: Record<string, { type?: string; title?: Array<{ plain_text?: string }> }> }).properties ?? {};
+      const titleProp = Object.values(props).find(p => p.type === 'title');
+      year = (titleProp?.title ?? []).map(t => t.plain_text ?? '').join('').trim();
+    } catch { /* 年份讀取失敗不影響內容 */ }
+    cache = { at: Date.now(), lessons, todayIndex, year };
+    return { lessons, todayIndex, year };
   } catch {
-    return cache ? { lessons: cache.lessons, todayIndex: cache.todayIndex } : null;
+    return cache ? { lessons: cache.lessons, todayIndex: cache.todayIndex, year: cache.year } : null;
   }
 }

@@ -1,11 +1,11 @@
 @echo off
-chcp 65001 >nul
-title OutputMaster (close this window to quit)
-cd /d "C:\Users\14009\Desktop\refining-product-features-and-ux (1)"
-echo Starting OutputMaster, browser will open in a few seconds...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :3000 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
-start "" cmd /c "timeout /t 6 /nobreak >nul && start http://localhost:3000"
-call npm start
-echo.
-echo Server stopped. Press any key to close.
-pause >nul
+rem ---------------------------------------------------------------
+rem Compatibility shim.
+rem The desktop shortcut "Hawaii.lnk" targets this filename (legacy name
+rem from when the app was called OutputMaster). Do not delete this file,
+rem or the desktop shortcut will fail with "cannot find the file".
+rem
+rem All real logic (stale-build detection, rebuild, readiness poll)
+rem lives in start-hawaii.bat / scripts\launch.mjs.
+rem ---------------------------------------------------------------
+call "%~dp0start-hawaii.bat"

@@ -10,6 +10,8 @@
 
 # === 构建产物 ===
 /.next/
+/.next.bak-*/
+/.backups/
 /out/
 /build
 next-env.d.ts
@@ -21,6 +23,7 @@ yarn-debug.log*
 yarn-error.log*
 *.tmp
 /tmp
+tsconfig.tsbuildinfo
 
 # === 编辑器 / 系统 ===
 .DS_Store
